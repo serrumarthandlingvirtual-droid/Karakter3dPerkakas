@@ -128,14 +128,7 @@ window.addEventListener('load', () => {
     initThree();
     initPhysics();
     buildWorkshop();
-    buildPliersCharacter(import { GLTFLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
-const loader = new GLTFLoader();
-loader.load('your-model.glb', gltf => {
-  playerMesh = gltf.scene;
-  playerMesh.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  scene.add(playerMesh);
-  // keep the same playerBody sphere setup below
-}););
+    buildPliersCharacter();
     initControls();
     initLogo();
     window.addEventListener('resize', onResize);
