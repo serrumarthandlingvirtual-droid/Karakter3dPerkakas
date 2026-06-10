@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Pliers Workshop — 3D Character Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #1a1208; font-family: Arial, Helvetica, sans-serif;
+    touch-action: none; -webkit-user-select: none; user-select: none;
+  }
+  #canvas-container { position: fixed; inset: 0; }
+  #canvas-container canvas { display: block; width: 100%; height: 100%; }
+
+  /* Logo overlay (top-right) */
+  #logo-overlay {
+    position: fixed; top: 12px; right: 12px;
+    width: 84px; height: 84px;
+    background-size: contain; background-repeat: no-repeat; background-position: center;
+    pointer-events: none; z-index: 15;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6));
+    opacity: 0; transition: opacity 0.6s ease;
+  }
+  #logo-overlay.ready { opacity: 0.95; }
+
+  /* Desktop info panel */
+  #info {
+    position: fixed; top: 12px; left: 12px; color: #fff;
+    background: rgba(0,0,0,0.55); padding: 10px 14px; border-radius: 8px;
+    font-size: 12px; line-height: 1.5; z-index: 10; max-width: 240px;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  #info b { color: #ffcc66; }
+
+  /* Mobile controls */
+  #mobile-controls { display: none; }
+  #joystick-zone {
+    position: fixed; left: 10px; bottom: 10px;
+    width: 150px; height: 150px; z-index: 20;
+  }
+  #action-buttons {
+    position: fixed; right: 15px; bottom: 25px; z-index: 20;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .action-btn {
+    width: 82px; height: 82px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,0.85);
+    background: rgba(255,255,255,0.18);
+    color: #fff; font-size: 14px; font-weight: bold; letter-spacing: 1px;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    touch-action: manipulation; cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .action-btn:active, .action-btn.active {
+    background: rgba(255,180,40,0.55); transform: scale(0.95);
+  }
+
+  /* Show mobile UI on touch devices / narrow screens */
+  @media (max-width: 900px), (pointer: coarse) {
+    #mobile-controls { display: block; }
+    #info { display: none; }
+  }
+
+  #loading {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #ffcc66; font-size: 18px; z-index: 100; background: #1a1208;
+  }
+</style>
+</head>
+<body>
+
+<div id="loading">Loading Workshop…</div>
+
+<div id="canvas-container"></div>
+<div id="logo-overlay"></div>
+
+<div id="info">
+  <b>Pliers Workshop</b><br>
+  Move: <b>WASD</b> / Arrows<br>
+  Run: <b>SHIFT</b><br>
+  Jump: <b>SPACE</b>
+</div>
+
+<div id="mobile-controls">
+  <div id="joystick-zone"></div>
+  <div id="action-buttons">
+    <button class="action-btn" id="btn-run">RUN</button>
+    <button class="action-btn" id="btn-jump">JUMP</button>
+  </div>
+</div>
+
+<!-- External trusted CDNs -->
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/nipplejs@0.10.1/dist/nipplejs.min.js"></script>
+
+<script>
+/* =========================================================
+   PLIERS WORKSHOP — 3D Character Demo
+   Pure client-side. No API keys. Safe for public GitHub repo.
+   ========================================================= */
+
+// ---------- Global state ----------
+let scene, camera, renderer, clock;
+let world;                         // Cannon physics world
+let playerBody, playerMesh;        // Player physics + visual
+let playerShadow;                  // Fake blob shadow
+let groundBody;
+const keys = {};
+const joystickInput = { x: 0, y: 0 };
+let isRunning = false;
+let wantsJump = false;
+let isGrounded = true;
+let jawAngle = 0;
+
+const WALK_SPEED = 5;
+const RUN_SPEED  = 10;
+const JUMP_VELOCITY = 7;
+const TABLE_SIZE = 40;
+
+const LOGO_URL = 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQHjVP89EmhemqPCMSNOFCv6wpq9jzs6DWo4g&s';
+
+// ---------- Boot ----------
+window.addEventListener('load', () => {
+  try {
+    initThree();
+    initPhysics();
+    buildWorkshop();
+    buildPliersCharacter(import { GLTFLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
+const loader = new GLTFLoader();
+loader.load('your-model.glb', gltf => {
+  playerMesh = gltf.scene;
+  playerMesh.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  scene.add(playerMesh);
+  // keep the same playerBody sphere setup below
+}););
+    initControls();
+    initLogo();
+    window.addEventListener('resize', onResize);
+    document.getElementById('loading').style.display = 'none';
+    clock = new THREE.Clock();
+    animate();
+  } catch (err) {
+    document.getElementById('loading').textContent = 'Error: ' + err.message;
+    console.error(err);
+  }
+});
+
+// ---------- Three.js setup ----------
+function initThree() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x2a2018);
+  scene.fog = new THREE.Fog(0x2a2018, 35, 90);
+
+  camera = new THREE.PerspectiveCamera(
+    60, window.innerWidth / window.innerHeight, 0.1, 200
+  );
+  camera.position.set(0, 8, 12);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+  // Prevent page scroll when touching the canvas
+  renderer.domElement.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+  renderer.domElement.addEventListener('touchmove',  e => e.preventDefault(), { passive: false });
+
+  // Lighting — warm workshop ambience
+  scene.add(new THREE.AmbientLight(0xffd9a8, 0.45));
+
+  const dir = new THREE.DirectionalLight(0xfff0d0, 1.05);
+  dir.position.set(12, 22, 10);
+  dir.castShadow = true;
+  dir.shadow.mapSize.set(2048, 2048);
+  dir.shadow.camera.left   = -25;
+  dir.shadow.camera.right  =  25;
+  dir.shadow.camera.top    =  25;
+  dir.shadow.camera.bottom = -25;
+  dir.shadow.camera.near   =  1;
+  dir.shadow.camera.far    =  60;
+  dir.shadow.bias = -0.0005;
+  scene.add(dir);
+
+  const warm = new THREE.PointLight(0xff8844, 0.55, 30, 2);
+  warm.position.set(-8, 7, -6);
+  scene.add(warm);
+
+  const cool = new THREE.PointLight(0x6699ff, 0.25, 30, 2);
+  cool.position.set(10, 6, 8);
+  scene.add(cool);
+}
+
+// ---------- Physics ----------
+function initPhysics() {
+  world = new CANNON.World();
+  world.gravity.set(0, -22, 0);
+  world.broadphase = new CANNON.NaiveBroadphase();
+  world.solver.iterations = 8;
+  world.defaultContactMaterial.friction = 0.3;
+  world.defaultContactMaterial.restitution = 0.05;
+}
+
+// ---------- Workshop environment ----------
+function buildWorkshop() {
+  // Procedural wood texture
+  const woodTex = makeWoodTexture();
+
+  // Table top
+  const topGeo = new THREE.BoxGeometry(TABLE_SIZE, 1, TABLE_SIZE);
+  const topMat = new THREE.MeshStandardMaterial({
+    map: woodTex, roughness: 0.85, metalness: 0.05
+  });
+  const top = new THREE.Mesh(topGeo, topMat);
+  top.position.y = -0.5;
+  top.receiveShadow = true;
+  scene.add(top);
+
+  // Table edge / apron
+  const edgeMat = new THREE.MeshStandardMaterial({ color: 0x3a2410, roughness: 0.9 });
+  const edge = new THREE.Mesh(
+    new THREE.BoxGeometry(TABLE_SIZE + 0.6, 0.4, TABLE_SIZE + 0.6),
+    edgeMat
+  );
+  edge.position.y = -1.2;
+  edge.receiveShadow = true;
+  scene.add(edge);
+
+  // Subtle grid overlay for "workshop blueprint" feel
+  const grid = new THREE.GridHelper(TABLE_SIZE, 20, 0x000000, 0x000000);
+  grid.position.y = 0.01;
+  grid.material.opacity = 0.12;
+  grid.material.transparent = true;
+  scene.add(grid);
+
+  // Physics ground (infinite plane at y=0)
+  groundBody = new CANNON.Body({ mass: 0 });
+  groundBody.addShape(new CANNON.Plane());
+  groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+  world.addBody(groundBody);
+
+  // Decorative workshop props
+  addWorkshopProps();
+}
+
+function makeWoodTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 512;
+  const ctx = c.getContext('2d');
+
+  // Base gradient
+  const g = ctx.createLinearGradient(0, 0, 512, 512);
+  g.addColorStop(0, '#8B5A2B');
+  g.addColorStop(1, '#6B4423');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 512, 512);
+
+  // Grain lines
+  for (let i = 0; i < 90; i++) {
+    const a = 0.08 + Math.random() * 0.3;
+    ctx.strokeStyle = `rgba(${40 + Math.random()*30|0},${20 + Math.random()*20|0},${5 + Math.random()*10|0},${a})`;
+    ctx.lineWidth = 0.4 + Math.random() * 2.6;
+    ctx.beginPath();
+    const y = Math.random() * 512;
+    ctx.moveTo(0, y);
+    for (let x = 0; x < 512; x += 10) {
+      ctx.lineTo(x, y + Math.sin(x * 0.03 + i) * 4 + (Math.random() - 0.5) * 2);
+    }
+    ctx.stroke();
+  }
+
+  // Knots
+  for (let i = 0; i < 4; i++) {
+    const x = Math.random() * 512, y = Math.random() * 512;
+    const r = 10 + Math.random() * 22;
+    const rg = ctx.createRadialGradient(x, y, 0, x, y, r);
+    rg.addColorStop(0, 'rgba(30,15,5,0.55)');
+    rg.addColorStop(1, 'rgba(60,30,10,0)');
+    ctx.fillStyle = rg;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(4, 4);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function addWorkshopProps() {
+  const props = [
+    { p:[-12, 0.4, -9],  s:[1.8, 0.8, 1.0], c:0x888888 }, // toolbox
+    { p:[ 13, 0.2, -11], s:[0.6, 0.4, 0.6], c:0xaa3333 }, // red box
+    { p:[ -9, 0.25, 11], s:[1.0, 0.5, 0.5], c:0x666666 }, // wrench-like
+    { p:[  9, 0.5,  9],  s:[0.45, 1.0, 0.45], c:0x444444, cyl:true }, // can
+    { p:[ 15, 0.15, 2],  s:[0.4, 0.3, 0.4], c:0x999999 }, // screw box
+    { p:[-14, 0.2,  4],  s:[0.5, 0.4, 0.5], c:0x557755 }, // green tin
+    { p:[  4, 0.15,-13], s:[0.3, 0.3, 1.2], c:0xaaaaaa }, // ruler
+  ];
+  props.forEach(p => {
+    const geo = p.cyl
+      ? new THREE.CylinderGeometry(p.s[0], p.s[0], p.s[1], 16)
+      : new THREE.BoxGeometry(p.s[0], p.s[1], p.s[2]);
+    const mat = new THREE.MeshStandardMaterial({
+      color: p.c, roughness: 0.7, metalness: 0.35
+    });
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(p.p[0], p.p[1], p.p[2]);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    scene.add(m);
+  });
+}
+
+// ---------- Pliers character ----------
+function buildPliersCharacter() {
+  playerMesh = new THREE.Group();
+
+  const redHandle = new THREE.MeshStandardMaterial({ color: 0xdd3322, roughness: 0.55, metalness: 0.15 });
+  const darkMetal = new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: 0.45, metalness: 0.85 });
+  const lightMetal = new THREE.MeshStandardMaterial({ color: 0x8a8a8a, roughness: 0.4, metalness: 0.9 });
+  const black = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
+
+  // --- Pivot (center of the pliers) ---
+  const pivotSideA = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.28, 0.35), darkMetal);
+  pivotSideA.castShadow = true;
+  playerMesh.add(pivotSideA);
+
+  const bolt = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.12, 0.6, 12),
+    lightMetal
+  );
+  bolt.rotation.x = Math.PI / 2;
+  playerMesh.add(bolt);
+
+  // --- Upper half (jaw + handle) ---
+  const upper = new THREE.Group();
+  upper.name = 'upper';
+
+  const upperJaw = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.22, 1.15), darkMetal);
+  upperJaw.position.set(0, 0.14, 0.85);
+  upperJaw.castShadow = true;
+  upper.add(upperJaw);
+
+  // Jaw teeth
+  for (let i = 0; i < 4; i++) {
+    const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), lightMetal);
+    tooth.position.set(0, 0.02, 0.45 + i * 0.22);
+    upper.add(tooth);
+  }
+
+  // Tapered jaw tip
+  const tipGeo = new THREE.ConeGeometry(0.14, 0.35, 4);
+  const upperTip = new THREE.Mesh(tipGeo, darkMetal);
+  upperTip.rotation.x = -Math.PI / 2;
+  upperTip.position.set(0, 0.14, 1.55);
+  upperTip.castShadow = true;
+  upper.add(upperTip);
+
+  // Handle
+  const upperHandle = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.22, 1.6), redHandle);
+  upperHandle.position.set(0, 0.12, -1.05);
+  upperHandle.castShadow = true;
+  upper.add(upperHandle);
+
+  // Handle grip (rounded end)
+  const grip = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 12), redHandle);
+  grip.position.set(0, 0.12, -1.85);
+  grip.scale.set(1, 0.85, 1.25);
+  grip.castShadow = true;
+  upper.add(grip);
+
+  playerMesh.add(upper);
+
+  // --- Lower half (mirror) ---
+  const lower = new THREE.Group();
+  lower.name = 'lower';
+
+  const lowerJaw = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.22, 1.15), darkMetal);
+  lowerJaw.position.set(0, -0.14, 0.85);
+  lowerJaw.castShadow = true;
+  lower.add(lowerJaw);
+
+  for (let i = 0; i < 4; i++) {
+    const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), lightMetal);
+    tooth.position.set(0, -0.02, 0.45 + i * 0.22);
+    lower.add(tooth);
+  }
+
+  const lowerTip = new THREE.Mesh(tipGeo.clone(), darkMetal);
+  lowerTip.rotation.x = -Math.PI / 2;
+  lowerTip.position.set(0, -0.14, 1.55);
+  lowerTip.castShadow = true;
+  lower.add(lowerTip);
+
+  const lowerHandle = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.22, 1.6), redHandle);
+  lowerHandle.position.set(0, -0.12, -1.05);
+  lowerHandle.castShadow = true;
+  lower.add(lowerHandle);
+
+  const lowerGrip = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 12), redHandle);
+  lowerGrip.position.set(0, -0.12, -1.85);
+  lowerGrip.scale.set(1, 0.85, 1.25);
+  lowerGrip.castShadow = true;
+  lower.add(lowerGrip);
+
+  playerMesh.add(lower);
+
+  // --- Cute eyes on the pivot ---
+  const eyeWhite = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+  const pupilMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3 });
+  [-0.14, 0.14].forEach(x => {
+    const white = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 10), eyeWhite);
+    white.position.set(x, 0.22, 0.18);
+    playerMesh.add(white);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 10), pupilMat);
+    pupil.position.set(x, 0.22, 0.255);
+    playerMesh.add(pupil);
+  });
+
+  // --- Tongue (appears when jaws open) ---
+  const tongue = new THREE.Mesh(
+    new THREE.BoxGeometry(0.14, 0.05, 0.35),
+    new THREE.MeshStandardMaterial({ color: 0xff6b8a, roughness: 0.7 })
+  );
+  tongue.position.set(0, 0, 0.85);
+  tongue.name = 'tongue';
+  tongue.visible = false;
+  playerMesh.add(tongue);
+
+  playerMesh.position.set(0, 0.6, 0);
+  scene.add(playerMesh);
+
+  // --- Fake blob shadow ---
+  const shGeo = new THREE.CircleGeometry(0.7, 20);
+  const shMat = new THREE.MeshBasicMaterial({
+    color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false
+  });
+  playerShadow = new THREE.Mesh(shGeo, shMat);
+  playerShadow.rotation.x = -Math.PI / 2;
+  playerShadow.position.y = 0.02;
+  scene.add(playerShadow);
+
+  // --- Physics body (sphere for smooth motion) ---
+  playerBody = new CANNON.Body({
+    mass: 1,
+    shape: new CANNON.Sphere(0.55),
+    linearDamping: 0.55,
+    angularDamping: 0.999,
+    fixedRotation: true
+  });
+  playerBody.position.set(0, 1.5, 0);
+  world.addBody(playerBody);
+
+  // Keep references for animation
+  playerMesh.userData.upper = upper;
+  playerMesh.userData.lower = lower;
+}
+
+// ---------- Controls ----------
+function initControls() {
+  // Keyboard
+  window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === 'Space') { wantsJump = true; e.preventDefault(); }
+    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  }, { passive: false });
+  window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+  // Detect touch device
+  const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+  const isMobileUA = /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
+
+  if (isTouch || isMobileUA || window.innerWidth < 900) {
+    setupMobileControls();
+  }
+}
+
+function setupMobileControls() {
+  const zone = document.getElementById('joystick-zone');
+  const joystick = nipplejs.create({
+    zone: zone,
+    mode: 'static',
+    position: { left: '75px', bottom: '75px' },
+    color: 'white',
+    size: 130
+  });
+  joystick.on('move', (evt, data) => {
+    const v = data.vector || { x: 0, y: 0 };
+    joystickInput.x =  v.x;
+    joystickInput.y =  v.y;
+  });
+  joystick.on('end', () => {
+    joystickInput.x = 0;
+    joystickInput.y = 0;
+  });
+
+  const btnJump = document.getElementById('btn-jump');
+  const btnRun  = document.getElementById('btn-run');
+
+  const bindHold = (el, onDown, onUp) => {
+    const down = e => { e.preventDefault(); onDown(); el.classList.add('active'); };
+    const up   = e => { e.preventDefault(); onUp();   el.classList.remove('active'); };
+    el.addEventListener('touchstart', down, { passive: false });
+    el.addEventListener('touchend',   up,   { passive: false });
+    el.addEventListener('touchcancel',up,   { passive: false });
+    el.addEventListener('mousedown',  down);
+    el.addEventListener('mouseup',    up);
+    el.addEventListener('mouseleave', up);
+  };
+
+  bindHold(btnJump, () => { wantsJump = true; }, () => {});
+  bindHold(btnRun,  () => { isRunning = true;  }, () => { isRunning = false; });
+}
+
+// ---------- Logo processing (white → transparent) ----------
+function initLogo() {
+  processLogo(LOGO_URL).then(dataUrl => {
+    const overlay = document.getElementById('logo-overlay');
+    const finalUrl = dataUrl || LOGO_URL; // fall back to original if CORS blocked
+    overlay.style.backgroundImage = `url(${finalUrl})`;
+    overlay.classList.add('ready');
+
+    // Also place as a decal on the workshop table
+    addLogoDecal(finalUrl);
+  }).catch(() => {
+    const overlay = document.getElementById('logo-overlay');
+    overlay.style.backgroundImage = `url(${LOGO_URL})`;
+    overlay.classList.add('ready');
+  });
+}
+
+function processLogo(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous'; // required to read pixels
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width  = img.naturalWidth  || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = imgData.data;
+
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i], g = d[i+1], b = d[i+2];
+          // Detect near-white pixels (all channels high and close together)
+          if (r > 210 && g > 210 && b > 210) {
+            const diff = Math.max(Math.abs(r-g), Math.abs(g-b), Math.abs(r-b));
+            if (diff < 30) {
+              // Smooth fade: the whiter, the more transparent
+              const brightness = (r + g + b) / 3;
+              const alpha = Math.max(0, Math.min(255, (255 - brightness) * 6));
+              d[i+3] = alpha;
+            }
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    img.onerror = () => reject(new Error('logo load failed'));
+    img.src = src;
+  });
+}
+
+function addLogoDecal(dataUrl) {
+  const loader = new THREE.TextureLoader();
+  loader.setCrossOrigin('anonymous');
+  const tex = loader.load(dataUrl);
+  tex.colorSpace = THREE.SRGBColorSpace;
+
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex, transparent: true, opacity: 0.92, depthWrite: false
+  });
+  const geo = new THREE.PlaneGeometry(4.5, 4.5);
+  const decal = new THREE.Mesh(geo, mat);
+  decal.rotation.x = -Math.PI / 2;
+  decal.position.set(6, 0.015, -6);
+  scene.add(decal);
+}
+
+// ---------- Per-frame updates ----------
+function updateControls(dt) {
+  // Combine keyboard + joystick input
+  let ix = 0, iz = 0;
+  if (keys['KeyW'] || keys['ArrowUp'])    iz -= 1;
+  if (keys['KeyS'] || keys['ArrowDown'])  iz += 1;
+  if (keys['KeyA'] || keys['ArrowLeft'])  ix -= 1;
+  if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
+
+  if (joystickInput.x !== 0 || joystickInput.y !== 0) {
+    ix = joystickInput.x;
+    iz = -joystickInput.y; // joystick y-up → world -z (forward)
+  }
+
+  const len = Math.hypot(ix, iz);
+  if (len > 1) { ix /= len; iz /= len; }
+  const moving = len > 0.08;
+
+  // Running (Shift on PC, button on mobile)
+  const runKey = keys['ShiftLeft'] || keys['ShiftRight'];
+  const running = moving && (isRunning || runKey);
+  const speed = running ? RUN_SPEED : WALK_SPEED;
+
+  // Apply horizontal velocity directly (preserves gravity-driven y)
+  playerBody.velocity.x = ix * speed;
+  playerBody.velocity.z = iz * speed;
+
+  // Rotate character toward movement direction
+  if (moving) {
+    const target = Math.atan2(ix, iz);
+    let cur = playerMesh.rotation.y;
+    let diff = target - cur;
+    while (diff >  Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    playerMesh.rotation.y += diff * Math.min(1, dt * 10);
+  }
+
+  // Ground detection (simple y-threshold for our flat world)
+  const wasGrounded = isGrounded;
+  isGrounded = playerBody.position.y < 0.75 && Math.abs(playerBody.velocity.y) < 1.5;
+  if (isGrounded && !wasGrounded) {
+    playerBody.velocity.y = 0;
+  }
+
+  // Jump
+  if (wantsJump && isGrounded) {
+    playerBody.velocity.y = JUMP_VELOCITY;
+    isGrounded = false;
+  }
+  wantsJump = false;
+
+  // Safety: respawn if fallen off the table
+  if (playerBody.position.y < -12) {
+    playerBody.position.set(0, 2, 0);
+    playerBody.velocity.set(0, 0, 0);
+  }
+}
+
+function updateAnimation(dt, time) {
+  // Sync visual with physics
+  playerMesh.position.set(
+    playerBody.position.x,
+    playerBody.position.y,
+    playerBody.position.z
+  );
+
+  const hSpeed = Math.hypot(playerBody.velocity.x, playerBody.velocity.z);
+  const moving  = hSpeed > 0.5;
+  const running = hSpeed > 7;
+  const jumping = playerBody.position.y > 0.9;
+
+  // Walking / running bob
+  if (moving && !jumping) {
+    const freq = running ? 13 : 7.5;
+    const amp  = running ? 0.16 : 0.08;
+    playerMesh.position.y += Math.abs(Math.sin(time * freq)) * amp;
+  }
+
+  // Jaw animation (open/close)
+  let jawTarget = 0;
+  if (jumping) {
+    jawTarget = 0.55; // wide open while airborne
+  } else if (running) {
+    jawTarget = 0.28 + Math.sin(time * 16) * 0.18;
+  } else if (moving) {
+    jawTarget = 0.12 + Math.sin(time * 8) * 0.1;
+  } else {
+    // Idle "blink": occasional tiny open
+    jawTarget = (Math.sin(time * 0.6) > 0.96) ? 0.12 : 0;
+  }
+  jawAngle += (jawTarget - jawAngle) * Math.min(1, dt * 12);
+
+  if (playerMesh.userData.upper && playerMesh.userData.lower) {
+    playerMesh.userData.upper.rotation.x = -jawAngle;
+    playerMesh.userData.lower.rotation.x =  jawAngle;
+  }
+
+  // Tongue sticks out when jaws open
+  const tongue = playerMesh.getObjectByName('tongue');
+  if (tongue) {
+    tongue.visible = jawAngle > 0.12;
+    tongue.position.z = 0.85 + jawAngle * 0.6;
+    tongue.scale.y = 1 + jawAngle * 2;
+  }
+
+  // Slight forward tilt when moving
+  const targetTilt = moving ? -0.08 : 0;
+  playerMesh.rotation.x += (targetTilt - playerMesh.rotation.x) * Math.min(1, dt * 6);
+
+  // Fake shadow follows, scales with height
+  if (playerShadow) {
+    playerShadow.position.x = playerMesh.position.x;
+    playerShadow.position.z = playerMesh.position.z;
+    const h = Math.max(0, playerMesh.position.y - 0.6);
+    const s = 1 + h * 0.12;
+    playerShadow.scale.set(s, s, s);
+    playerShadow.material.opacity = Math.max(0.08, 0.38 - h * 0.04);
+  }
+}
+
+function updateCamera() {
+  // Third-person follow, fixed offset relative to world
+  const target = new THREE.Vector3(
+    playerMesh.position.x,
+    playerMesh.position.y + 5.5,
+    playerMesh.position.z + 9
+  );
+  camera.position.lerp(target, 0.12);
+  camera.lookAt(
+    playerMesh.position.x,
+    playerMesh.position.y + 0.4,
+    playerMesh.position.z
+  );
+}
+
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// ---------- Main loop ----------
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t  = clock.elapsedTime;
+
+  updateControls(dt);
+  world.step(1 / 60, dt, 3);
+  updateAnimation(dt, t);
+  updateCamera();
+
+  renderer.render(scene, camera);
+}
+</script>
+</body>
+</html>
